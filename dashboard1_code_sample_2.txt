@@ -1,0 +1,489 @@
+
+<html>
+<head>
+
+<!-- required for lat long usage instead of point placement -->
+<script >
+
+/*************
+Clicky uses embedded js + callbacks to get around cross domain scripting restrictions. Clicky calls three functions on page load. 
+visitorsByCountry
+totalVisitors
+currrentVisitors
+
+TotalVisitors and currentVisitors simply populate their respective boxes with a number, dynamically, based on the data provided. visitorsByCountry kicks off a chain of events which creates the map and its data. 
+First, it sets a periodic refresh to make it update every few hours. 
+Then, it makes an array of the # of visitors for each country, orders the array, and reduces the size of the array to contain the max number of countries allowed or min number of visitors allowed, only. 
+This cutoff value is used later on to check whether to push a value into countries to be displayed. 
+
+At the end of visitorsByCountry, delayCreateViewVisitorsByCountry will call createViewVisitorsByCountry after a set delay. The delay is used to make sure that all data is loaded before we try and create the map. 
+Later, I might set a timeout to check periodically that data is loaded before moving forward. 
+createViewVisitorsByCountry loops through all the countries, calls populateCountryCodeArrayAndMapPoints on them which constructs two arrays based on that loop. Those arrays are the country codes to display and the map points to display. 
+Countries from clicky results are matched to lat and long values (currently located in customjs/countrycode-latlong2.json) based on country codes
+  mapPoints =[];
+  listOfCountryCodesToDisplay = [];
+
+
+/***************/
+
+
+
+/*************** configuration data***********/
+var minimumNumVisitorsToDisplay = 1;// # of visitors must be greater than this to display. Increased if more than maxNumVisitorsToDisplay have this many visitors. 
+var maxNumCountriesToDisplay = 10; // more than 5 tends to lead to overlap, given the current design. 
+var refreshRate= 1000* 600;
+var monthsToDisplay = 6; // number of months to display in the bar graph. Max 12
+/*************************************/
+foo = Date();
+
+var monthsLoaded =0;
+aDate = new Date(); // note, Proj4.js, required for lat long is interfereing with new Date()
+
+var currentMonth =aDate.getMonth(); // +1 since Jan is 1, not zero
+
+aDate.setMonth(aDate.getMonth() - monthsToDisplay);
+
+
+
+
+var startMonth = aDate.getMonth()+2;//+1 since Jan is 1, not zero
+console.log("startMonth="+ startMonth);
+var seriesArray = [];//an associative array containing the monthly data and a country key
+seriesArrayTotals =new Array(12);
+maxNumCountriesToDisplay -=1;// corrects for zero offset.
+//var listOfCountryValues=[];// a list of values, to be sorted, in order to determine # of items to display, cutoff points, etc. i.e. how many visitors does a country need to be in the top 6 countries?
+var listOfCountryCodesToDisplay=[];
+</script>
+<script src="https://code.jquery.com/jquery-1.9.1.min.js"></script>
+
+<link rel="stylesheet" type="text/css" href="css/dashboard1.css">
+<script src="customjs/countrycode-latlong2.js"></script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.3.6/proj4.js"></script>
+<script>
+
+//additions - populating the latlong object, stored on the server, with lat long values accessed via country code. Should we add code ensuring that this loads first? Currently, that's just assumed
+var latLong;
+var countryData; // defined in createVisitorsByCountry. Used to look up countrycode and lat long tweaks by country name
+var calculatedMinimumVisitors; // calc in visitorsByCountry. If we want the countries with the top x number of visitors, what is the minimum # acceptable?
+var countriesAddedToMap =0;//calculated in createViewVisitorsByCountry
+var mapPoints=[]; 
+var monthsLoaded =0;
+
+// on page load, load the bar chart for # of clicks
+$(document).ready( function(){
+  callForClicksByMonth();
+});
+
+function totalVisitors(data)
+{
+  $(function () {
+     document.getElementById("totalTrafficValue").innerHTML = data[0].dates[0].items[0].value;
+  });
+}
+
+function currrentVisitors(data)
+{
+  $(function () {
+  document.getElementById("currentTrafficValue").innerHTML = data[0].dates[0].items[0].value;
+  });
+
+}
+var monthNames = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+];
+function loadMonthlyBarChart( data )
+{
+
+  monthsLoaded++; 
+  series =[];
+
+  seriesArrayTotalsToDisplay  = []; /// the seriesArrayTotals after it's been trimmed to the appropriate months. 
+  for (i=0; i<12; i++ ) 
+  {
+      if ( (typeof seriesArrayTotals[i]) == "undefined")
+      {
+          seriesArrayTotals[i]=0;// make all months have valid data so we don't break anything.
+      }
+    }
+
+
+  var monthNumber = parseInt(data[0].dates[0].date.slice(5,7)) -1;// the month of the data returned
+seriesArrayTotals[monthNumber] = parseInt(data[0].dates[0].items[0].value);
+
+      if (monthsLoaded == monthsToDisplay)// loadMonthlyBarChart fxn is called each time data returns. When all the data has been loaded, proceed.
+      {// create json obect from array
+
+            for ( i = 0; i< monthsToDisplay; i++)
+            {
+                seriesArrayTotalsToDisplay[i] = seriesArrayTotals[(i+ startMonth-2)%12];
+            }
+            var  monthNamesForTheGraph =[];// month
+            for ( i = 0; i< monthsToDisplay; i++)
+            {
+                monthNamesForTheGraph[i] = monthNames[(i+ startMonth -2)%12];
+            }
+
+            //monthCategories = monthNames.slice(startMonth , monthsToDisplay+1 );// +1 added because end month is not inclusive.
+      
+            
+             series.push({"name": "Total Traffic", "data": seriesArrayTotalsToDisplay });
+            createBarGraph(series, monthNamesForTheGraph);
+      }
+}
+
+function createBarGraph(seriesObj, monthNamesForTheGraph)
+{
+
+    $(function () 
+    {
+        $('#container_bar').highcharts(
+        {
+            chart: {
+                type: 'column'
+            },
+            credits: {
+                enabled: false
+            },
+            title: {
+                text: '',
+              enabled: false
+            },exporting: {
+                enabled: false
+            },
+            
+            xAxis: {
+                categories: monthNamesForTheGraph,//monthCategories,
+                crosshair: true
+            },
+            yAxis: {
+                min: 0,
+                title: {
+                    text: 'Hits'
+                }
+            },
+            tooltip: {
+                headerFormat: '<span style="font-size:10px">{point.key}</span><table>',
+                pointFormat: '<tr><td style="color:{series.color};padding:0">{series.name}: </td>' +
+                    '<td style="padding:0"><b>{point.y:.1f} mm</b></td></tr>',
+                footerFormat: '</table>',
+                shared: true,
+                useHTML: true
+            },
+            plotOptions: {
+                column: {
+                    pointPadding: 0.2,
+                    borderWidth: 0
+                }
+            },
+            series: seriesObj
+//hardcoded
+        });
+    });
+
+}
+
+function visitorsByCountry(data)
+{
+  // this function takes the max number of countries to be displayed and the minimum number of visitors to be displayed (global values) and uses them to calcluate the actual minimum number of visitors a country can have if it is to be displayed. This number is then used to check each country when creating a new array of map points to be displayed. 
+  
+  var listOfCountryValues =[];
+  setTimeout( function() {location.reload();}, refreshRate);
+  // collect # of visitors for each country, determine how many markers to display, and then call createViewvisitorsByCountry
+  for(var i=0; i< data[0].dates[0].items.length; i++)
+  {
+    listOfCountryValues.push(parseInt( data[0].dates[0].items[i].value) );
+  }
+  function sortNumber(a,b) {
+        return a - b;
+  }
+  //listOfCountryValues
+  listOfCountryValues.sort(sortNumber).reverse();
+  //console.log("listOfCountryValues=", listOfCountryValues); 
+  for( i=0; i<listOfCountryValues.length; i++){
+    if ( (listOfCountryValues[i] < minimumNumVisitorsToDisplay)  || ( i > maxNumCountriesToDisplay)  )
+    {
+      listOfCountryValues = listOfCountryValues.slice(0,i);
+      break;
+    }
+  }
+
+
+  listOfCountryValues.reverse();
+
+//"listOfCountryValues[0] = (calculated min visitors) allowable for a country
+//listOfCountryValues.length = calculated number of countries to display
+
+  calculatedMinimumVisitors = listOfCountryValues[0];
+  delayCreateViewVisitorsByCountry(data, listOfCountryValues.length, listOfCountryValues[0] );
+}// end currenVisitors fxn
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+////////****begin snip*///////
+
+
+var universalLatModifier = 8;
+var universalLongModifier = 0;
+
+function populateCountryCodeArrayAndMapPoints(countryFullTitle,  countryHits, loopCounter) 
+{
+  if ( !(typeof(countryData.countries[countryFullTitle])==="object") )
+  {
+    return false;
+  }else{
+
+    //console.log( "@@country object =", countryData.countries[countryFullTitle], "countryFullTitle" ,countryFullTitle)
+  }
+ // if (countryData[countryFullTitle] )
+  if (countryHits >= calculatedMinimumVisitors)
+  {
+    countriesAddedToMap++;
+    listOfCountryCodesToDisplay.push( countryData.countries[countryFullTitle].code );
+  }
+
+  countrycode = countryData.countries[countryFullTitle].code.toLowerCase();
+
+  mapPoints.push({// United States
+      
+    code: countryData.countries[countryFullTitle].code,
+    name: countryHits, 
+    lat: countryData.countries[countryFullTitle].latModifier + countrycodeLatLong[countrycode].lat  +universalLatModifier,
+    lon: countryData.countries[countryFullTitle].longModifier + countrycodeLatLong[countrycode].long  + universalLongModifier
+  });
+
+
+}// end populateCountryCodeArrayAndMapPoints
+
+
+
+function delayCreateViewVisitorsByCountry( data, calculatedNumberOfCountriesToDisplay, calculateMinimumVisitors)
+{
+
+
+  setTimeout( createViewVisitorsByCountry(data, calculatedNumberOfCountriesToDisplay, calculateMinimumVisitors  )  , 5000);  
+}//end delayCreateViewVisitorsByCountry
+
+
+function createViewVisitorsByCountry(data, calculatedNumberOfCountriesToDisplay, calculatedMinimumVisitors)
+{
+  mapPoints =[];
+  listOfCountryCodesToDisplay = [];
+  countriesAddedToMap =0;
+  var totalItems = data[0].dates[0].items.length; // The total number of countries that we have data for. We will cycle through them, and break out of the loop once we hit the number of countries that we are allowed to display, calculated earlier based on
+                                                  // number of countries we are allowed to display as well as minimum threshold of clicks required for display.
+
+ 
+
+
+  for(var i=0; i< totalItems; i++)
+  {
+        populateCountryCodeArrayAndMapPoints(data[0].dates[0].items[i].title, data[0].dates[0].items[i].value, i )
+        if (countriesAddedToMap === calculatedNumberOfCountriesToDisplay){
+          break;
+        }
+  }
+
+  $(function () 
+  {
+
+      var highmapVar = $('#container').highcharts('Map', 
+      {
+          title: 
+          {
+              text: ''
+          },
+          exporting: 
+          {
+              enabled: false
+          },
+          credits: 
+      {
+        enabled: false
+      },
+      chart: 
+      {
+        backgroundColor: "rgba(255, 255, 255, 0)",
+        events: 
+        {
+          load: function (){}// end load
+        }//end events              
+      },//end chart
+      tooltip: 
+      {
+        enabled: false
+      },
+      legend: 
+      {
+        enabled: false
+      }, // end legend
+      mapNavigation: 
+      {
+        enabled: false,
+        enableButtons: false
+      },  // end mapNavigation
+      plotOptions: 
+      {
+        map: 
+        {
+          allAreas: false,
+          joinBy: ['iso-a2', 'code'],
+          mapData: Highcharts.maps['custom/world'],
+        },//end map
+        series: 
+        {
+          dataLables: 
+          {
+            useHTML: true
+          },
+          states:
+          {
+            normal: 
+            {
+              animation: false
+            }
+          },// end states
+          point: 
+          {
+              
+          }//end point
+        }//end series
+      },//end PlotOptions
+      series : [
+      {
+        name: 'Other',
+        color: '#3886ae',
+        data:   $.map(["CN","AF","AL","DZ","AS","AD","AO","AI","AR","AM","AW","AU","AT","AZ","BS","BH","BD","BB","BY","BE","BZ","BJ","BM","BT","BO","BA","BW","BR","BN","BG","BF","BI","KH","CM","CA","CV","KY","CF","TD","CL","CO","KM","CD","CG","CR","CI","HR","CU","CW","CY","CZ","DK","DJ","DM","DO","EC","EG","SV","GQ","ER","EE","ET","FO","FJ","FI","FR","PF","GA","GM","GE","DE","GH","GR","GL","GD","GU","GT","GN","GW","GY","HT","HN","HK","HU","IS","ID","IR","IQ","IE","IM","IL","IT","JM","JP","JO","KZ","KE","KI","KP","KR","XK","KW","KG","LA","LV","LB","LS","LR","LY","LI","LT","LU","MO","MK","MG","MW","MY","MV","ML","MT","MH","MR","MU","YT","MX","FM","MD","MC","MN","ME","MA","MZ","MM","NA","NP","NL","NC","NZ","NI","NE","NG","MP","NO","OM","PK","PW","PA","PG","PY","PE","PL","PT","PR","WA","RO","RU","RW","WS","SM","ST","SA","SN","RS","SC","SL","SG","SK","SI","SB","SO","ZA","SS","ES","LK","KN","LC","MF","VC","SD","SR","SZ","SE","CH","SY","TJ","TZ","TH","TP","TG","TO","TT","TN","TR","TM","TC","TV","UG","UA","AE","GB","UY","UZ","VU","VE","VN","VI","PS","EH","YE","ZM","ZW","RB"], 
+            function (code) 
+            {
+              return { code: code };  
+            })
+        },// end 'other countries' series
+        {
+          name: 'Main',
+          color:'#7abad2',         
+          data: $.map(listOfCountryCodesToDisplay, function (code) 
+            {
+              return { code: code };
+            })
+          }, // End main series
+          {
+            type: 'mappoint',
+            mapData: Highcharts.maps['custom/world'],
+            name: 'Population 2010',
+            data: mapPoints,
+            minSize: 4,
+            maxSize: '12%',        
+            marker: 
+            {
+              useHTML: true,
+              symbol: 'url(http://ec2-52-1-243-201.compute-1.amazonaws.com/wp-content/uploads/2015/07/smallcirclepointer24.png)'
+            }
+          }// end mappoint series
+        ]// End series
+      });
+  });
+
+}
+
+///////////////********////////////end snip
+</script>
+
+<script src="https://api.clicky.com/api/stats/4?site_id=xxx&sitekey=xxx&type=countries&date=previous-31-days&output=json&json_callback=visitorsByCountry"></script> 
+<script src="https://api.clicky.com/api/stats/4?site_id=xxxxxx&sitekey=xxxx&type=visitors&output=json&json_callback=totalVisitors"></script> 
+<script src="https://api.clicky.com/api/stats/4?site_id=xxxxxx&sitekey=xxxxx&type=visitors-online&output=json&json_callback=currrentVisitors"></script> 
+<script>
+function callForClicksByMonth()
+{// note that queryMonth is one-based since the Clicky query requires conventional month numbers
+    var date = new Date();
+
+    var getSingleMonthScript = document.createElement('script');
+    var monthString;
+    var getSingleMonthScript=[];
+    for(i=monthsToDisplay; i>0; --i)
+    {
+       getSingleMonthScript[i] = document.createElement('script');
+        queryMonth= 1+ date.getMonth(); // correct for zero based month array
+        queryYear = date.getFullYear();
+        String(i).length <2 ? ( monthString = "0"+ queryMonth) : ( monthString = queryMonth );
+        getSingleMonthScript[i].setAttribute('src','https://api.clicky.com/api/stats/4?site_id=xxxx&sitekey=xxxxx&type=visitors&date=' + queryYear + '-' + monthString +'&output=json&json_callback=loadMonthlyBarChart');
+        document.head.appendChild(getSingleMonthScript[i]);
+
+        // note- date was failing to decrement for july once but not a second time. Here's a hack to correct. 
+
+        oldMonth = date.getMonth();
+        date.setMonth(date.getMonth() - 1);
+        newMonth = date.getMonth();
+
+        if (oldMonth==newMonth){ // this is a hack to fix a very strange failure to decrement the month on rare occasion
+            date.setMonth(date.getMonth() - 1);
+        }
+    }
+}
+</script>
+
+<link rel='stylesheet' id='x-gravity-forms-css'  href='../wp-content/themes/x-child/style.css' type='text/css' media='all' />
+</head>
+<body>
+
+<div id="wrapper">
+    <div id="header">
+        <img src="//globeone.com/wp-content/uploads/2015/05/globeone_header_logo.png" alt="" />
+        <div id="banner"><img id="bannerImg" src="img/banner1.png" /></div>
+        <h1 class="title">GlobeOne Site Traffic-p</h1>
+    </div>
+ <div id="leftColumn">
+    <div id="currentSiteTrafficContainer" class="trafficContainer">
+      Current <br />Site Traffic <hr />
+      <span id="currentTrafficValue"></span>
+    </div>
+    <div id="container_bar" style="margin-top: 50px; width: 300px; " ></div>
+
+    <div id="todaysTotalTrafficContainer" class="trafficContainer">Today's<br />Total Traffic <hr />
+      <span id="totalTrafficValue">empty</span>
+    </div>
+      
+  </div>
+
+  <div id="rightColumn">
+      <div id="container" ></div>
+  </div>
+
+  <div id="footer">
+    <div class="bottom-title"><h1>By Country</h1><span style="position:relative; bottom: 2px; font-size: 14px;" >(previous 31 days)</span></div>
+    <div id="bottom-banner"><img id="bottomBannerImg" src="img/bottom-banner.png" /></div>
+  </div>
+</div>       
+
+
+  <script src="https://code.highcharts.com/maps/highmaps.js"></script>
+  <script src="https://code.highcharts.com/maps/modules/data.js"></script>
+  <script src="https://code.highcharts.com/maps/modules/exporting.js"></script>
+  <script src="https://code.highcharts.com/mapdata/custom/world.js"></script>
+  <!-- Flag sprites service provided by Martijn Lafeber, https://github.com/lafeber/world-flags-sprite/blob/master/LICENSE -->
+  <link rel="stylesheet" type="text/css" href="https://cloud.github.com/downloads/lafeber/world-flags-sprite/flags32.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/3.5.5/d3.min.js" charset="utf-8"></script>
+
+
+<script>
+
+
+
+</script>
+
+</body>
+</html>
